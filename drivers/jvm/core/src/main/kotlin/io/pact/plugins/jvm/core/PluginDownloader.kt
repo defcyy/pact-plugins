@@ -18,6 +18,11 @@ import org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
 import org.apache.commons.lang3.SystemUtils.OS_ARCH
 import org.apache.commons.lang3.SystemUtils.OS_NAME
 import org.apache.hc.client5.http.fluent.Request
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient
+import org.apache.hc.client5.http.impl.classic.HttpClients
+import org.apache.hc.client5.http.impl.io.ManagedHttpClientConnectionFactory
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder
+import org.apache.hc.core5.http.config.Http1Config
 import java.io.File
 import java.io.StringReader
 import java.util.zip.GZIPInputStream
@@ -33,6 +38,20 @@ interface PluginDownloader {
 }
 
 object DefaultPluginDownloader: PluginDownloader {
+  private const val MAX_HTTP1_LINE_LENGTH = 16 * 1024
+
+  private val pluginDownloadHttpClient: CloseableHttpClient = HttpClients.custom()
+    .setConnectionManager(
+      PoolingHttpClientConnectionManagerBuilder.create()
+        .setConnectionFactory(
+          ManagedHttpClientConnectionFactory.builder()
+            .http1Config(Http1Config.custom().setMaxLineLength(MAX_HTTP1_LINE_LENGTH).build())
+            .build()
+        )
+        .build()
+    )
+    .build()
+
   override fun installPluginFromUrl(sourceUrl: String): Result<PactPluginManifest, String> {
     val response = when (val response = fetchJsonFromUrl(sourceUrl)) {
       is Result.Ok -> response.value
@@ -289,7 +308,7 @@ object DefaultPluginDownloader: PluginDownloader {
     return try {
       Request.get(url)
         .userAgent("pact-plugin-driver")
-        .execute()
+        .execute(pluginDownloadHttpClient)
         .saveContent(file)
       logger.debug { "File downloaded OK (${file.length()} bytes)" }
       Result.Ok(file)
@@ -303,7 +322,7 @@ object DefaultPluginDownloader: PluginDownloader {
     return try {
       val status = Request.head("$url/download/$tag/$filename")
         .userAgent("pact-plugin-driver")
-        .execute()
+        .execute(pluginDownloadHttpClient)
         .returnResponse()
         .code
       status in 200..299
@@ -338,7 +357,7 @@ object DefaultPluginDownloader: PluginDownloader {
       val json = Request.get(sourceUrl)
         .userAgent("pact-plugin-driver")
         .addHeader("accept", "application/json")
-        .execute()
+        .execute(pluginDownloadHttpClient)
         .returnContent()
         .asString()
       logger.debug { "Got response $json" }
